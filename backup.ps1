@@ -17,11 +17,16 @@ if (-not (Test-Path -LiteralPath $backupDir)) {
 
 # 日付時間付きZIP名
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$zipName = "DropMp4_$stamp.zip"
+$projectName = Split-Path -Leaf $targetPath
+if (-not $projectName) {
+    $projectName = "backup"
+}
+$safeProjectName = ($projectName -replace '[<>:"/\\|?*]', "_")
+$zipName = "${safeProjectName}_$stamp.zip"
 $zipPath = Join-Path $backupDir $zipName
 
 # 一時作業フォルダ
-$tempRoot = Join-Path $env:TEMP "DropMp4_backup_$stamp"
+$tempRoot = Join-Path $env:TEMP "${safeProjectName}_backup_$stamp"
 if (Test-Path -LiteralPath $tempRoot) {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force
 }
@@ -41,14 +46,19 @@ function Test-BackupExcluded {
 
     $excludedDirPrefixes = @(
         ".git\",
+        ".pslocal\",
         ".venv\",
         "venv\",
+        "--x\",
         "__pycache__\",
         "__oldsource\",
         "oldsource\",
         "backup\",
         "build\",
         "dist\",
+        "_worker\",
+        "_workhistory\",
+        "_workerarchive\",
         "_cache\",
         "_logs\",
         "_browser_profiles\",
@@ -59,11 +69,12 @@ function Test-BackupExcluded {
         if ($relative.StartsWith($prefix)) { return $true }
         if ($relative.Contains("\__pycache__\")) { return $true }
     }
-    if ($relative.StartsWith("_worker\") -and $extension -ne ".md") { return $true }
-    if ($relative.StartsWith("_workhistory\") -and $extension -ne ".md") { return $true }
+    if ($relative -in @("agents.md", ".psctx.ps1")) { return $true }
+    if ($relative -like ".psctx.ps1.disabled_*") { return $true }
 
     if ($extension -in @(".srt", ".srt2")) { return $true }
     if ($extension -in @(".m3u", ".m3u8", ".wpl", ".pls")) { return $true }
+    if ($extension -eq ".zip") { return $true }
     if ($relative.StartsWith("_conf\srt\")) { return $true }
     if ($relative.StartsWith("_conf\_capture\") -and $extension -in @(".jpg", ".jpeg")) { return $true }
     return $false
@@ -82,16 +93,25 @@ function Get-BackupCandidateFiles {
 }
 
 try {
-    Write-Host "==== DropMp4 source backup ===="
+    Write-Host "==== Project source backup ===="
     Write-Host "Target : $targetPath"
     Write-Host "Output : $zipPath"
     Write-Host ""
 
     # バックアップ対象
-    # pyソース、ps1、アイコン、画像ファイル
+    # スクリプト、ドキュメント、設定、画像ファイル
     $patterns = @(
         "*.py",
         "*.ps1",
+        "*.psm1",
+        "*.psd1",
+        "*.cmd",
+        "*.md",
+        "*.txt",
+        "*.json",
+        "*.yml",
+        "*.yaml",
+        "*.xml",
         "*.ico",
         "*.png",
         "*.jpg",
@@ -100,7 +120,8 @@ try {
         "*.bmp",
         "*.gif",
         "*.bat",
-        "*.spec"
+        "*.spec",
+        "LICENSE"
     )
 
     $files = @()
@@ -110,13 +131,6 @@ try {
     $confDir = Join-Path $targetPath "_conf"
     if (Test-Path -LiteralPath $confDir) {
         $files += Get-ChildItem -LiteralPath $confDir -File -Recurse -ErrorAction SilentlyContinue
-    }
-
-    foreach ($historyDirName in @("_Worker", "_WorkHistory")) {
-        $historyDir = Join-Path $targetPath $historyDirName
-        if (Test-Path -LiteralPath $historyDir) {
-            $files += Get-ChildItem -LiteralPath $historyDir -File -Filter "*.md" -Recurse -ErrorAction SilentlyContinue
-        }
     }
 
     $pyInstallerAssetDir = Join-Path $targetPath "pyinstaller_assets"
@@ -148,7 +162,7 @@ try {
     # メモ情報も一緒に入れる
     $manifest = Join-Path $tempRoot "_backup_manifest.txt"
     @(
-        "DropMp4 backup"
+        "$projectName backup"
         "Created : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
         "Source  : $targetPath"
         "Output  : $zipPath"

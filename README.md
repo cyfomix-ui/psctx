@@ -1,56 +1,56 @@
 # PSCtx - Project-local PowerShell Context
 
-English README: https://github.com/cyfomix-ui/psctx/blob/main/README.md
-Japanese README / 日本語README: https://github.com/cyfomix-ui/psctx/blob/main/README_JA.md
+**PSCtx** is a lightweight PowerShell script set that switches your shell context per project folder.
 
-PSCtx is a lightweight PowerShell helper for project folders.
+It separates PSReadLine history by project, reloads the in-memory up/down-key history when you move between registered folders, applies project-local environment variables, adds prompt markers, and provides small Bash-like conveniences such as `h`, `!<id>`, and trailing `&` background execution.
 
-It switches command history, environment variables, prompt markers,
-and small shell conveniences according to the folder you are in.
+日本語では **「プロジェクト別 PowerShell コンテキスト」**、または **「フォルダ別 PowerShell 履歴・環境切替」** です。
 
-In Japanese, this tool can be described as:
+---
 
-> プロジェクト別 PowerShell コンテキスト
+## Features
 
-or more plainly:
+- Per-project PowerShell command history
+- Per-project up/down-key history isolation
+- Project-local environment variables through `.psctx.json`
+- Prompt marker showing whether the current folder is managed
+  - `# ` in gray: PSCtx is loaded, but the current folder is not registered
+  - `$ ` in white: the current folder is inside a registered PSCtx project
+- Bash-like history display and replay
+  - `h`
+  - `!5`
+  - `! 5`
+- Optional trailing `&` background execution per project
+  - `notepad .\.psctx.json &`
+  - `dotnet build &`
+- One-command project registration and unregistration
+- Does not require administrator privileges
 
-> フォルダ別 PowerShell 履歴・環境切替
+---
 
-## Main features
+## Target environment
 
-- Separate PSReadLine history per project folder.
-- Separate Up/Down arrow history per project folder.
-- Load project-local environment variables from `.psctx.ps1`.
-- Show a prompt marker for managed and unmanaged folders.
-- Add Bash-like conveniences such as `h`, `!5`, and `cmd &`.
-- Provide `psx --v` to show both PowerShell and PSCtx versions.
-- Work with Windows PowerShell 5.1 and PowerShell 7.x.
+PSCtx is designed for Windows development environments.
 
-## Prompt markers
+| Item | Status |
+| --- | --- |
+| Windows PowerShell 5.1 | Targeted |
+| PowerShell 7.x on Windows | Targeted |
+| PSReadLine | Required |
+| Windows Terminal | Supported if PSReadLine is available |
+| Administrator privileges | Not required |
+| Linux/macOS PowerShell | Not the primary target |
 
-When PSCtx is loaded but the current folder is not managed,
-the prompt starts with a gray `# ` marker.
+The scripts use `#requires -version 5.1`, `$PROFILE`, PSReadLine, and Windows-style helper `.cmd` launchers.
 
-```text
-# 2026-06-27 10:21:15 [C:\Users\YourName] PS>
-```
-
-When the current folder is inside a managed project,
-the prompt starts with a white `$ ` marker.
-
-```text
-$ 2026-06-27 10:21:15 [D:\tools\SampleProject] PS>
-```
-
-The marker is intentionally small. It tells you whether the
-current shell context is managed by PSCtx.
+---
 
 ## Installation
 
-Extract the PSCtx files into a stable folder, for example:
+Extract this repository or ZIP file to any folder, for example:
 
-```text
-D:\tools\PowerShellContext\
+```powershell
+D:\tools\PSCtx
 ```
 
 Then run:
@@ -61,270 +61,366 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 . $PROFILE
 ```
 
-This installs PSCtx into the current PowerShell profile.
+The installer updates your PowerShell profile and adds the tool folder to the user `PATH`.
 
-PowerShell 5.1 and PowerShell 7.x have different profile paths.
-If you want to use both, run the installer once from each shell.
+After installation, the recommended command is:
+
+```powershell
+psctx
+```
+
+Backward-compatible aliases are also available:
+
+```powershell
+pph
+psprojhist
+```
+
+`psctx` is the recommended name.
+
+---
 
 ## Register a project folder
 
-Register a project folder with:
+Register a project folder:
 
 ```powershell
-psctx D:\tools\SampleProject
+psctx D:\tools\WinPicker
 ```
 
-You can also register the current folder:
+Register the current folder:
 
 ```powershell
 psctx .
 ```
 
-PSCtx creates the following files in the project folder:
+Register with a custom project name:
+
+```powershell
+psctx D:\tools\WinPicker /name WinPicker
+```
+
+Register and show the project name in the prompt:
+
+```powershell
+psctx D:\tools\WinPicker /showname
+```
+
+Register without trailing `&` background support:
+
+```powershell
+psctx D:\tools\WinPicker /noamp
+```
+
+---
+
+## What registration creates
+
+For a registered folder such as `D:\tools\WinPicker`, PSCtx creates:
 
 ```text
-.psctx.ps1
-.pslocal\PSReadLine\
+D:\tools\WinPicker\
+  .psctx.json
+  .pslocal\
+    PSReadLine\
+      ConsoleHost_history.txt
+      ConsoleHost_history_psctx_history.jsonl
 ```
 
-`.psctx.ps1` stores project-local settings.
-`.pslocal` stores local history data and should not be committed.
+It also adds this entry to the project `.gitignore`:
 
-## Unregister a project folder
-
-To unregister a project folder:
-
-```powershell
-psctx /uninst D:\tools\SampleProject
+```gitignore
+.pslocal/
 ```
 
-To unregister the current folder:
+Do not commit `.pslocal/`. Command history may contain tokens, internal paths, server names, or other sensitive information.
 
-```powershell
-psctx /uninst .
+---
+
+## Project config: `.psctx.json`
+
+A project config file looks like this:
+
+```json
+{
+  "Name": "WinPicker",
+  "EnableAmpersandFork": true,
+  "ShowProjectNameInPrompt": false,
+  "Env": {
+    "DOTNET_NOLOGO": "1",
+    "DOTNET_CLI_TELEMETRY_OPTOUT": "1"
+  }
+}
 ```
 
-By default, the local history folder is preserved.
-To remove it as well:
+Environment variables in `Env` are applied only while the shell is inside that project folder or its subfolders.
 
-```powershell
-psctx /uninst D:\tools\SampleProject /purge
+When you leave the registered folder, PSCtx restores the previous environment values and returns to the normal PowerShell history file.
+
+---
+
+## Prompt markers
+
+When PSCtx is loaded but the current folder is not registered:
+
+```text
+# 2026-06-27 09:30:00 [C:\Users\kazu] PS>
 ```
 
-## History commands
+When the current folder is inside a registered project:
 
-`h` displays PSCtx-managed history with command IDs.
+```text
+$ 2026-06-27 09:33:36 [D:\tools\WinPicker] PS>
+```
+
+The mark is intentionally small. It only tells you whether the current folder is under PSCtx control.
+
+---
+
+## Per-project history
+
+Inside a registered project, command history is saved to:
+
+```text
+.pslocal\PSReadLine\ConsoleHost_history.txt
+```
+
+The up/down-key history is also reloaded when you enter or leave a registered project. This avoids mixing commands from unrelated projects.
+
+For example:
+
+```text
+D:\tools\WinPicker\
+  uses WinPicker history
+
+D:\tools\DropMp4\
+  uses DropMp4 history
+
+C:\Users\kazu\
+  uses normal PowerShell history
+```
+
+---
+
+## `h` and history replay
+
+Show recent PSCtx/PSReadLine history:
 
 ```powershell
 h
 ```
 
-Example:
+Example output:
 
 ```text
    Id  DateTime             CommandLine
    --  --------             -----------
     1  2026-06-27 09:33:36  ll
     2  2026-06-27 09:33:38  dir
-    3  2026-06-27 09:33:44  cd D:\tools\SampleProject\
+    3  2026-06-27 09:33:44  cd D:\tools\WinPicker\
 ```
 
-Run a history item by ID:
+Replay a command:
 
 ```powershell
-!5
+!3
 ```
 
 or:
 
 ```powershell
-! 5
+! 3
 ```
 
-The explicit function form also works:
+Equivalent explicit command:
 
 ```powershell
-Invoke-PSCtxHistoryCommand -Id 5
+Invoke-PSCtxHistoryCommand -Id 3
 ```
 
-## Background command helper
+Important: PSCtx overrides PowerShell's default `h` alias so that `h` and `!<id>` use the same history numbering.
 
-Inside a managed project folder, PSCtx can treat a trailing `&`
-as a background-job request.
+---
+
+## Trailing `&` background execution
+
+If `"EnableAmpersandFork": true` in `.psctx.json`, PSCtx treats a trailing `&` as a simple background job request.
 
 ```powershell
-notepad .\.psctx.ps1 &
+notepad .\.psctx.json &
 dotnet build &
 ```
 
-This is not a Unix fork. Internally PSCtx maps the command to
-a PowerShell job so that the prompt returns immediately.
-
-Useful helper commands:
+Check jobs:
 
 ```powershell
 bgjobs
+```
+
+Read job output:
+
+```powershell
 bgout 1
+```
+
+Stop and remove a job:
+
+```powershell
 bgkill 1
 ```
 
-If you do not want this behavior for a project, register it with:
+This is not a full Unix process model. Internally it uses PowerShell jobs. It is intended as a convenient project-local shortcut, not as a complete Bash emulation layer.
+
+---
+
+## Unregister a project folder
+
+Disable PSCtx for a project:
 
 ```powershell
-psctx D:\tools\SampleProject /noamp
+psctx /uninst D:\tools\WinPicker
 ```
 
-## Version commands
+This renames `.psctx.json` instead of deleting it.
 
-Show both PowerShell and PSCtx versions:
+Disable and remove `.pslocal/` history files:
 
 ```powershell
-psx --v
+psctx /uninst D:\tools\WinPicker /purge
 ```
 
-Example:
+---
 
-```text
-PowerShell 7.6.3 (Core)
-PSCtx      0.7.1
-Profile:   C:\Users\YourName\Documents\PowerShell\Microsoft.PowerShell_profile.ps1
-ToolPath:  D:\tools\PowerShellContext
-```
+## Remove PSCtx from your PowerShell profile
 
-You can also use:
+From the PSCtx tool folder:
 
 ```powershell
-psctx /version
-psctx -v
-psctxv
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\Uninstall-PSCtx.ps1
 ```
 
-## Update policy
-
-You do not need to register every project again when PSCtx itself
-is updated.
-
-A typical update is:
-
-```text
-1. Extract the new PSCtx files over the existing tool folder.
-2. Run Install-PSCtx.ps1 once from the PSCtx tool folder.
-3. Reload the profile or restart PowerShell.
-```
-
-Existing project files such as `.psctx.ps1` and `.pslocal` remain
-valid.
-
-If a new version introduces new project options, old projects still
-work. Edit `.psctx.ps1` only when you want to use the new options.
-
-## PowerShell 5.1 support
-
-PSCtx targets PowerShell 5.1 or later.
-
-Windows PowerShell 5.1 and PowerShell 7.x use different profile
-folders. Install PSCtx once for each shell if you use both.
-
-PowerShell 7.x profile example:
-
-```text
-C:\Users\YourName\Documents\PowerShell\Microsoft.PowerShell_profile.ps1
-```
-
-Windows PowerShell 5.1 profile example:
-
-```text
-C:\Users\YourName\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1
-```
-
-If PSReadLine is too old on PowerShell 5.1, update it with:
+Or:
 
 ```powershell
-Install-Module PSReadLine -Scope CurrentUser -Force
+psctx /removeprofile
 ```
 
-## FAQ
+Then open a new PowerShell window.
 
-### Does PSCtx keep settings after entering a project folder?
+---
 
-Yes. A project context stays active while you are inside that
-project folder or any of its subfolders.
+## Security notes
 
-When you move to another managed project, PSCtx switches to that
-project context.
+- `.pslocal/` is intentionally local and should not be committed.
+- Shell history may contain secrets or private paths.
+- `.psctx.json` is a PSCtx data file read as JSON, but its values still affect your shell environment inside that project.
+- Only register project folders you trust.
+- Installation modifies `$PROFILE` and the user `PATH`.
+- The profile file is backed up before being modified.
 
-When you move to an unmanaged folder, PSCtx returns to the normal
-context.
+---
 
-### Do I need to reinstall PSCtx for every project after an update?
+## License
 
-No. PSCtx itself is installed into your PowerShell profile.
+MIT License. See [LICENSE](LICENSE).
 
-Each project is registered separately by creating `.psctx.ps1`.
-After a PSCtx update, you usually only need to reinstall the PSCtx
-runtime into the profile once.
+---
 
-### Why does `# ` appear in an unmanaged folder?
+# 日本語説明
 
-`# ` means PSCtx is loaded, but the current folder is not managed.
-It is a status marker, not an error.
+## PSCtx とは
 
-### Why does `$ ` appear in a managed folder?
+**PSCtx** は、PowerShell の状態をプロジェクトフォルダごとに切り替えるための軽量な ps1 ツールです。
 
-`$ ` means PSCtx is active for the current project folder.
-History, environment variables, and helpers are using the project
-context.
+主な目的は、開発フォルダごとに以下を分離・切替することです。
 
-### Why did old history entries have no timestamp?
+- コマンド履歴
+- 上下キーで呼び出される PSReadLine 履歴
+- 環境変数
+- プロンプト表示
+- 簡易的な Bash 風操作
 
-Standard PSReadLine history files do not store timestamps.
+PowerShell を Bash そのものにするツールではありません。Windows 上で複数の開発フォルダを行き来するときに、履歴や環境が混ざる問題を軽く解消するためのものです。
 
-PSCtx records timestamps in an additional JSONL file. Commands run
-after this feature was added can show date and time. Older entries
-may not have timestamp data.
+## インストール
 
-### Why did `h` and `!5` originally point to different commands?
+任意のフォルダに展開して実行します。
 
-PowerShell already has `h` as an alias for `Get-History`.
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\Install-PSCtx.ps1
+. $PROFILE
+```
 
-PSCtx now overrides `h` so that the displayed ID matches the command
-used by `!5` and `Invoke-PSCtxHistoryCommand`.
+## プロジェクト登録
 
-### Why did `psx --v` once show a read-only variable error?
+```powershell
+psctx D:\tools\WinPicker
+```
 
-PowerShell variable names are case-insensitive.
+現在のフォルダを登録する場合:
 
-An internal variable named `$psEdition` collided with the built-in
-read-only `$PSEdition`. PSCtx 0.7.1 fixed this by renaming the
-internal variable.
+```powershell
+psctx .
+```
 
-### Is `cmd &` the same as Bash fork?
+解除する場合:
 
-No. PSCtx does not implement Unix process forking.
+```powershell
+psctx /uninst D:\tools\WinPicker
+```
 
-It provides a Bash-like shortcut by converting a trailing `&` into
-a PowerShell job.
+履歴フォルダも削除する場合:
 
-### Is `.pslocal` safe to commit?
+```powershell
+psctx /uninst D:\tools\WinPicker /purge
+```
 
-No. Do not commit `.pslocal`.
+## プロンプト表示
 
-Command history may contain paths, server names, tokens, or other
-sensitive data.
+未登録フォルダではグレーの `# ` が表示されます。
 
-Add this to `.gitignore`:
+```text
+# 2026-06-27 09:30:00 [C:\Users\kazu] PS>
+```
+
+登録済みフォルダでは白の `$ ` が表示されます。
+
+```text
+$ 2026-06-27 09:33:36 [D:\tools\WinPicker] PS>
+```
+
+## 履歴表示と再実行
+
+```powershell
+h
+```
+
+```powershell
+!5
+! 5
+```
+
+`h` で表示した Id と、`!<id>` で実行する Id は一致します。
+
+## GitHub に上げないもの
+
+`.pslocal/` は履歴保存用のローカルフォルダです。GitHub には上げないでください。
 
 ```gitignore
 .pslocal/
 ```
 
-## Security notes
+履歴にはトークン、パス、サーバー名、作業中の内部情報などが入る可能性があります。
 
-`.psctx.ps1` is a PowerShell script file. Treat it as code.
-Only use `.psctx.ps1` files from folders you trust.
+## Execution policy and .psctx.json
 
-`.pslocal` may contain command history. Do not publish it.
+PSCtx 0.8.2 or later stores project configuration in
+`.psctx.json`. The runtime no longer executes `.psctx.ps1`
+when entering a project folder, which avoids unsigned-script
+errors under stricter execution policies such as `AllSigned`.
 
-## License
-
-MIT License.
+For an existing project that still has `.psctx.ps1`, run
+`psctx .` once in the project root to create `.psctx.json`.
+The JSON file is preferred from then on.

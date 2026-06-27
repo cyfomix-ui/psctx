@@ -1,47 +1,31 @@
 # Changelog
 
-## 0.7.1
+## 0.8.2
 
-- Added `psx --v` to show PowerShell and PSCtx versions together.
-- Added `psctx /version`, `psctx -v`, and `psctxv`.
-- Fixed an internal variable collision with PowerShell `$PSEdition`.
-- Documented PowerShell 5.1 and PowerShell 7.x profile differences.
+- Fixed a noisy profile reload message when alias `h` had already been removed.
+- `h` is now removed only when `Alias:h` exists.
 
-## 0.7.0
+## 0.8.1
 
-- Added version display commands.
-- Added GitHub-ready README and documentation structure.
+- Added `psx --v` to show both PowerShell and PSCtx versions.
+- Added `psctx /version`, `psctx -v`, `psctxv`, and `psx` runtime helpers.
+- Added `psx.ps1` and `psx.cmd` as short command entry points.
 
-## 0.6.0
 
-- Added date and time display to PSCtx history output.
-- Added timestamp recording through PSCtx JSONL history metadata.
-- Fixed `!5` and `! 5` handling.
+## v0.1.0
 
-## 0.5.0
+Initial public-ready package.
 
-- Added `h` history display.
-- Added history replay by ID.
-- Aligned `h` IDs with PSCtx history replay IDs.
-
-## 0.4.0
-
-- Added prompt markers.
-- Unmanaged folders show `# `.
-- Managed project folders show `$ `.
-
-## 0.3.0
-
-- Added Bash-like trailing `&` helper through PowerShell jobs.
-- Added `bgjobs`, `bgout`, and `bgkill` helpers.
-
-## 0.2.0
-
-- Added per-project PSReadLine history path switching.
-- Added Up/Down arrow history separation by reloading PSReadLine memory.
-
-## 0.1.0
-
-- Initial PSCtx concept.
-- Added project registration through `.psctx.ps1`.
-- Added project-local environment variable support.
+- Fixed recommended command name to `psctx`
+- Kept `pph` and `psprojhist` as backward-compatible aliases
+- Added project-local PSReadLine history switching
+- Added up/down-key history isolation
+- Added `.psctx.json` project config
+- Added prompt markers: gray `# ` for unmanaged folders, white `$ ` for managed folders
+- Added `h` history list with DateTime
+- Added `!<id>` and `! <id>` history replay
+- Added optional trailing `&` background job support
+- Added install/uninstall scripts
+- Added Japanese and English README content
+- Added note article draft
+- Added MIT License

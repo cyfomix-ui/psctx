@@ -13,7 +13,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:PSCtx_Version = '0.7.1'
+$script:PSCtx_Version = '0.8.2'
 $script:PSCtx_Name    = 'PSCtx'
 $script:PSCtx_Title   = 'Project-local PowerShell Context'
 
@@ -32,7 +32,7 @@ function Get-PPHProfileBlock {
 
 @"
 # >>> PSCtx managed block >>>
-# This block is managed by psctx. Edit .psctx.ps1 in each project instead.
+# This block is managed by psctx. Edit .psctx.json in each project instead.
 `$script:PPH_ToolDir = $qToolDir
 `$script:PPH_DefaultHistoryPath = `$null
 `$script:PPH_CurrentRoot = `$null
@@ -41,7 +41,7 @@ function Get-PPHProfileBlock {
 `$script:PPH_OriginalEnv = @{}
 `$script:PPH_EnableAmpersandFork = `$false
 `$script:PPH_ShowProjectNameInPrompt = `$false
-`$script:PSCtx_Version = '0.7.1'
+`$script:PSCtx_Version = '0.8.2'
 `$script:PSCtx_Name    = 'PSCtx'
 `$script:PSCtx_Title   = 'Project-local PowerShell Context'
 
@@ -274,8 +274,11 @@ function global:Show-PSCtxHistory {
 
 try {
     # PowerShell has a built-in alias named h -> Get-History.
-    # Remove it and define h as a function so h and ! use the same PSCtx ids.
-    Remove-Item Alias:h -Force -ErrorAction SilentlyContinue
+    # Some profiles may already remove it, so check first. This avoids
+    # a noisy 'Cannot find path Alias:\h' message when reloading $PROFILE.
+    if (Test-Path Alias:h) {
+        Remove-Item Alias:h -Force -ErrorAction SilentlyContinue
+    }
 } catch {
 }
 function global:h {
@@ -316,6 +319,89 @@ try {
 
 Set-PPHAddToHistoryHandler
 
+
+function ConvertTo-PPHHashtable {
+    param([AllowNull()]`$InputObject)
+
+    if (`$null -eq `$InputObject) {
+        return @{}
+    }
+
+    if (`$InputObject -is [hashtable]) {
+        return `$InputObject
+    }
+
+    `$result = @{}
+    foreach (`$prop in `$InputObject.PSObject.Properties) {
+        `$value = `$prop.Value
+        if (`$value -is [System.Management.Automation.PSCustomObject]) {
+            `$value = ConvertTo-PPHHashtable -InputObject `$value
+        }
+        `$result[`$prop.Name] = `$value
+    }
+
+    return `$result
+}
+
+function Read-PPHJsonProjectConfig {
+    param([Parameter(Mandatory)][string]`$ConfigPath)
+
+    try {
+        `$raw = Get-Content -LiteralPath `$ConfigPath -Raw -ErrorAction Stop
+        if (-not `$raw -or -not `$raw.Trim()) {
+            return @{}
+        }
+        `$obj = `$raw | ConvertFrom-Json -ErrorAction Stop
+        return (ConvertTo-PPHHashtable -InputObject `$obj)
+    } catch {
+        Write-Warning "Failed to load project context: `$ConfigPath"
+        Write-Warning `$_.Exception.Message
+        return @{}
+    }
+}
+
+function Read-PPHLegacyPs1ProjectConfig {
+    param([Parameter(Mandatory)][string]`$ConfigPath)
+
+    # Legacy .psctx.ps1 is intentionally NOT executed.
+    # This avoids ExecutionPolicy / unsigned-script failures and also keeps
+    # project configuration data-only. Only the simple PSCtx-generated
+    # hashtable format is parsed here.
+    `$loaded = @{}
+
+    try {
+        `$text = Get-Content -LiteralPath `$ConfigPath -Raw -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to read legacy project context: `$ConfigPath"
+        return `$loaded
+    }
+
+    if (`$text -match "(?m)^\s*Name\s*=\s*'((?:''|[^'])*)'") {
+        `$loaded.Name = (`$matches[1] -replace "''", "'")
+    }
+
+    if (`$text -match '(?m)^\s*EnableAmpersandFork\s*=\s*\`$(true|false)') {
+        `$loaded.EnableAmpersandFork = ([string]`$matches[1] -ieq 'true')
+    }
+
+    if (`$text -match '(?m)^\s*ShowProjectNameInPrompt\s*=\s*\`$(true|false)') {
+        `$loaded.ShowProjectNameInPrompt = ([string]`$matches[1] -ieq 'true')
+    }
+
+    `$envMap = @{}
+    if (`$text -match '(?s)Env\s*=\s*@\{(?<body>.*?)\}') {
+        `$body = [string]`$matches['body']
+        foreach (`$m in [regex]::Matches(`$body, "'((?:''|[^'])*)'\s*=\s*'((?:''|[^'])*)'")) {
+            `$key = `$m.Groups[1].Value -replace "''", "'"
+            `$val = `$m.Groups[2].Value -replace "''", "'"
+            if (`$key) { `$envMap[`$key] = `$val }
+        }
+    }
+    `$loaded.Env = `$envMap
+
+    return `$loaded
+}
+
 function Get-PPHProjectContext {
     try {
         `$providerPath = (Get-Location).ProviderPath
@@ -333,19 +419,20 @@ function Get-PPHProjectContext {
     }
 
     while (`$dir) {
-        `$ctxFile = Join-Path `$dir.FullName '.psctx.ps1'
-        if (Test-Path -LiteralPath `$ctxFile) {
-            `$loaded = @{}
-            try {
-                `$candidate = & `$ctxFile
-                if (`$candidate -is [hashtable]) {
-                    `$loaded = `$candidate
-                }
-            } catch {
-                Write-Warning "Failed to load project context: `$ctxFile"
-                `$loaded = @{}
-            }
+        `$jsonFile = Join-Path `$dir.FullName '.psctx.json'
+        `$legacyFile = Join-Path `$dir.FullName '.psctx.ps1'
+        `$ctxFile = `$null
+        `$loaded = @{}
 
+        if (Test-Path -LiteralPath `$jsonFile) {
+            `$ctxFile = `$jsonFile
+            `$loaded = Read-PPHJsonProjectConfig -ConfigPath `$jsonFile
+        } elseif (Test-Path -LiteralPath `$legacyFile) {
+            `$ctxFile = `$legacyFile
+            `$loaded = Read-PPHLegacyPs1ProjectConfig -ConfigPath `$legacyFile
+        }
+
+        if (`$ctxFile) {
             `$name = `$loaded.Name
             if (-not `$name) {
                 `$name = Split-Path `$dir.FullName -Leaf
@@ -717,6 +804,7 @@ function Add-PPHGitIgnoreEntry {
     }
 }
 
+
 function Write-PPHProjectConfig {
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
@@ -725,39 +813,33 @@ function Write-PPHProjectConfig {
         [Parameter(Mandatory)][bool]$ShowProjectNameInPrompt
     )
 
-    $ctxFile = Join-Path $ProjectRoot '.psctx.ps1'
+    $ctxFile = Join-Path $ProjectRoot '.psctx.json'
+    $legacyFile = Join-Path $ProjectRoot '.psctx.ps1'
+
     if (Test-Path -LiteralPath $ctxFile) {
         $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
         Copy-Item -LiteralPath $ctxFile -Destination "$ctxFile.bak_$stamp" -Force
     }
 
-    $nameLiteral = Quote-PSLiteral $Name
-    $ampLiteral = if ($EnableAmpersandFork) { '$true' } else { '$false' }
-    $showNameLiteral = if ($ShowProjectNameInPrompt) { '$true' } else { '$false' }
-
-    $content = @"
-@{
-    # 表示名。履歴ファイル名には使わず、将来の表示・識別用です。
-    Name = $nameLiteral
-
-    # このプロジェクト配下だけ、行末 & をバックグラウンド実行として扱います。
-    # 例: notepad .\.psctx.ps1 &
-    EnableAmpersandFork = $ampLiteral
-
-    # `$true にすると、プロンプトの `$ の後ろに [ProjectName] を出します。
-    # 現在の独自プロンプトをなるべく壊さないため、既定は `$false です。
-    ShowProjectNameInPrompt = $showNameLiteral
-
-    # このプロジェクト配下にいる間だけ適用する環境変数です。
-    Env = @{
-        # 例:
-        # 'DOTNET_NOLOGO' = '1'
-        # 'DOTNET_CLI_TELEMETRY_OPTOUT' = '1'
+    # Keep legacy config as a backup if it exists, but do not overwrite it.
+    # The runtime prefers .psctx.json, so the unsigned .psctx.ps1 no longer
+    # has to be executed under AllSigned / RemoteSigned policies.
+    if ((Test-Path -LiteralPath $legacyFile) -and -not (Test-Path -LiteralPath "$legacyFile.legacy")) {
+        try {
+            Copy-Item -LiteralPath $legacyFile -Destination "$legacyFile.legacy" -Force
+        } catch {
+        }
     }
-}
-"@
 
-    Set-Content -LiteralPath $ctxFile -Value $content -Encoding UTF8
+    $config = [ordered]@{
+        Name                    = $Name
+        EnableAmpersandFork     = $EnableAmpersandFork
+        ShowProjectNameInPrompt = $ShowProjectNameInPrompt
+        Env                     = [ordered]@{}
+    }
+
+    $json = $config | ConvertTo-Json -Depth 8
+    Set-Content -LiteralPath $ctxFile -Value $json -Encoding UTF8
 }
 
 function Register-PPHProject {
@@ -782,6 +864,7 @@ function Register-PPHProject {
     return $root
 }
 
+
 function Unregister-PPHProject {
     param(
         [Parameter(Mandatory)][string]$TargetPath,
@@ -789,13 +872,15 @@ function Unregister-PPHProject {
     )
 
     $root = (Resolve-Path -LiteralPath $TargetPath).ProviderPath
-    $ctxFile = Join-Path $root '.psctx.ps1'
     $changed = $false
+    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 
-    if (Test-Path -LiteralPath $ctxFile) {
-        $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-        Move-Item -LiteralPath $ctxFile -Destination "$ctxFile.disabled_$stamp" -Force
-        $changed = $true
+    foreach ($leaf in @('.psctx.json', '.psctx.ps1')) {
+        $ctxFile = Join-Path $root $leaf
+        if (Test-Path -LiteralPath $ctxFile) {
+            Move-Item -LiteralPath $ctxFile -Destination "$ctxFile.disabled_$stamp" -Force
+            $changed = $true
+        }
     }
 
     if ($Purge) {
@@ -808,7 +893,6 @@ function Unregister-PPHProject {
 
     return [pscustomobject]@{ Root = $root; Changed = $changed }
 }
-
 
 function Show-PPHVersion {
     $psVersion = if ($PSVersionTable.PSVersion) { $PSVersionTable.PSVersion.ToString() } else { 'Unknown' }
@@ -828,7 +912,7 @@ psctx usage:
 
   psctx /uninst <folder>
       Disable per-project history/context for that folder.
-      .psctx.ps1 is renamed, not deleted.
+      .psctx.json / .psctx.ps1 are renamed, not deleted.
 
   psctx /uninst <folder> /purge
       Disable and remove .pslocal history directory.
@@ -937,7 +1021,7 @@ if ($mode -eq 'unregister') {
         Write-Host "Disabled project-local PowerShell context for:" -ForegroundColor Green
         Write-Host "  $($result.Root)"
     } else {
-        Write-Host "No active .psctx.ps1 found under:" -ForegroundColor Yellow
+        Write-Host "No active .psctx.json or .psctx.ps1 found under:" -ForegroundColor Yellow
         Write-Host "  $($result.Root)"
     }
     Write-Host "Reload with: . `$PROFILE"
@@ -948,7 +1032,7 @@ $registeredRoot = Register-PPHProject -TargetPath $target -Name $name -EnableAmp
 Write-Host "Registered project-local PowerShell context for:" -ForegroundColor Green
 Write-Host "  $registeredRoot"
 Write-Host "Project config:"
-Write-Host "  $(Join-Path $registeredRoot '.psctx.ps1')"
+Write-Host "  $(Join-Path $registeredRoot '.psctx.json')"
 Write-Host "History folder:"
 Write-Host "  $(Join-Path $registeredRoot '.pslocal\PSReadLine')"
 Write-Host "PowerShell profile updated:"

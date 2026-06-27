@@ -1,5 +1,8 @@
 # PSCtx - プロジェクト別 PowerShell コンテキスト
 
+English README: https://github.com/cyfomix-ui/psctx/blob/main/README.md
+Japanese README / 日本語README: https://github.com/cyfomix-ui/psctx/blob/main/README_JA.md
+
 PSCtx は、PowerShell の動作をプロジェクトフォルダごとに
 切り替えるための軽量ツールです。
 

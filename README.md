@@ -1,5 +1,8 @@
 # PSCtx - Project-local PowerShell Context
 
+English README: https://github.com/cyfomix-ui/psctx/blob/main/README.md
+Japanese README / 日本語README: https://github.com/cyfomix-ui/psctx/blob/main/README_JA.md
+
 PSCtx is a lightweight PowerShell helper for project folders.
 
 It switches command history, environment variables, prompt markers,

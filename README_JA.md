@@ -1,6 +1,6 @@
-# PSCtx - プロジェクト別 PowerShell コンテキスト
+﻿# PSX - プロジェクト別 PowerShell コンテキスト
 
-**PSCtx** は、PowerShell の状態をプロジェクトフォルダごとに切り替えるための軽量な ps1 ツールです。
+**PSX** は、PowerShell の状態をプロジェクトフォルダごとに切り替えるための軽量な ps1 ツールです。
 
 開発フォルダごとに、コマンド履歴、上下キーで呼び出される PSReadLine 履歴、環境変数、プロンプト表示を分離・切替します。また、`h` と `!<id>` による履歴再実行、行末 `&` による簡易バックグラウンド実行にも対応します。
 
@@ -14,8 +14,8 @@
 - 上下キーで出る PSReadLine 履歴のプロジェクト別切替
 - `.psctx.json` によるプロジェクト別環境変数
 - プロンプト先頭の状態マーク
-  - グレーの `# `: PSCtx は読み込まれているが、現在フォルダは未登録
-  - 白の `$ `: 現在フォルダは PSCtx 登録済みプロジェクト配下
+  - グレーの `# `: PSX は読み込まれているが、現在フォルダは未登録
+  - 白の `$ `: 現在フォルダは PSX 登録済みプロジェクト配下
 - `h` による履歴表示
 - `!5` / `! 5` による履歴再実行
 - 行末 `&` による簡易バックグラウンド実行
@@ -25,7 +25,7 @@
 
 ## バージョン確認
 
-PowerShell 本体と PSCtx のバージョンは、次の短いコマンドで同時に確認できます。
+PowerShell 本体と PSX のバージョンは、次の短いコマンドで同時に確認できます。
 
 ```powershell
 psx --v
@@ -35,20 +35,20 @@ psx --v
 
 ```text
 PowerShell 7.5.2 (Core)
-PSCtx      0.8.2
+PSX      0.8.2
 Profile:   C:\Users\kazu\Documents\PowerShell\Microsoft.PowerShell_profile.ps1
-ToolPath:  D:\tools\PSCtx
+ToolPath:  D:\tools\PSX
 ```
 
 同等のコマンドとして、以下も使えます。
 
 ```powershell
-psctx /version
-psctx -v
-psctxv
+psx /version
+psx -v
+psxv
 ```
 
-`psx` は短縮用のコマンドです。現時点では `psctx` へ処理を渡す入口として使い、特に `psx --v` を「PowerShell/PSCtx 状態確認」の定番コマンドとして想定しています。
+`psx` は短縮用のコマンドです。現時点では `psx` へ処理を渡す入口として使い、特に `psx --v` を「PowerShell/PSX 状態確認」の定番コマンドとして想定しています。
 
 ## 対象環境
 
@@ -72,28 +72,28 @@ psctxv
 例:
 
 ```powershell
-D:\tools\PSCtx
+D:\tools\PSX
 ```
 
 そのフォルダで実行します。
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
-.\Install-PSCtx.ps1
+.\Install-PSX.ps1
 . $PROFILE
 ```
 
-以後、推奨コマンド名は `psctx` です。
+以後、推奨コマンド名は `psx` です。
 
 ```powershell
-psctx
+psx
 ```
 
 互換用に以下の別名も残しています。
 
 ```powershell
-pph
-psprojhist
+psx
+psx
 ```
 
 ---
@@ -103,31 +103,31 @@ psprojhist
 指定フォルダを登録します。
 
 ```powershell
-psctx D:\tools\WinPicker
+psx D:\tools\WinPicker
 ```
 
 現在のフォルダを登録します。
 
 ```powershell
-psctx .
+psx .
 ```
 
 名前を指定して登録します。
 
 ```powershell
-psctx D:\tools\WinPicker /name WinPicker
+psx D:\tools\WinPicker /name WinPicker
 ```
 
 プロンプトにプロジェクト名も出す場合:
 
 ```powershell
-psctx D:\tools\WinPicker /showname
+psx D:\tools\WinPicker /showname
 ```
 
 行末 `&` 機能を無効にして登録する場合:
 
 ```powershell
-psctx D:\tools\WinPicker /noamp
+psx D:\tools\WinPicker /noamp
 ```
 
 ---
@@ -142,7 +142,7 @@ D:\tools\WinPicker\
   .pslocal\
     PSReadLine\
       ConsoleHost_history.txt
-      ConsoleHost_history_psctx_history.jsonl
+      ConsoleHost_history_psx_history.jsonl
 ```
 
 さらに `.gitignore` に以下を追記します。
@@ -220,10 +220,10 @@ h
 明示的に実行する場合:
 
 ```powershell
-Invoke-PSCtxHistoryCommand -Id 3
+Invoke-PSXHistoryCommand -Id 3
 ```
 
-PSCtx は PowerShell 標準の `h` エイリアスを上書きします。これは `h` に表示される Id と `!<id>` で実行される Id を一致させるためです。
+PSX は PowerShell 標準の `h` エイリアスを上書きします。これは `h` に表示される Id と `!<id>` で実行される Id を一致させるためです。
 
 ---
 
@@ -260,10 +260,10 @@ bgkill 1
 
 ## 解除
 
-プロジェクトの PSCtx 設定を解除します。
+プロジェクトの PSX 設定を解除します。
 
 ```powershell
-psctx /uninst D:\tools\WinPicker
+psx /uninst D:\tools\WinPicker
 ```
 
 `.psctx.json` は削除せず、リネームします。
@@ -271,24 +271,24 @@ psctx /uninst D:\tools\WinPicker
 履歴ごと削除する場合:
 
 ```powershell
-psctx /uninst D:\tools\WinPicker /purge
+psx /uninst D:\tools\WinPicker /purge
 ```
 
 ---
 
-## PSCtx 自体のアンインストール
+## PSX 自体のアンインストール
 
-PSCtx の展開フォルダで実行します。
+PSX の展開フォルダで実行します。
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
-.\Uninstall-PSCtx.ps1
+.\Uninstall-PSX.ps1
 ```
 
 または:
 
 ```powershell
-psctx /removeprofile
+psx /removeprofile
 ```
 
 その後、新しい PowerShell を開いてください。
@@ -298,7 +298,7 @@ psctx /removeprofile
 ## 注意
 
 - `.pslocal/` はコミットしないでください。
-- `.psctx.json` は PSCtx が JSON として読み込むデータファイルですが、その内容はそのプロジェクト配下のシェル環境に反映されます。
+- `.psctx.json` は PSX が JSON として読み込むデータファイルですが、その内容はそのプロジェクト配下のシェル環境に反映されます。
 - 信頼できるプロジェクトフォルダだけを登録してください。
 - インストール時に `$PROFILE` とユーザー `PATH` を変更します。
 - 変更前の `$PROFILE` はバックアップされます。
@@ -311,11 +311,11 @@ MIT License。詳細は [LICENSE](LICENSE) を参照してください。
 
 ## 実行ポリシーと .psctx.json
 
-PSCtx 0.8.2 以降は、プロジェクト設定を `.psctx.json` に
+PSX 0.8.2 以降は、プロジェクト設定を `.psctx.json` に
 保存します。以前の `.psctx.ps1` は実行しないため、
 `AllSigned` などの実行ポリシーでも、プロジェクト移動時に
 未署名スクリプトとしてブロックされにくくなります。
 
-既存の `.psctx.ps1` があるフォルダでも、再度 `psctx .` を
+既存の `.psctx.ps1` があるフォルダでも、再度 `psx .` を
 実行すると `.psctx.json` が作成され、以後はそちらが優先
 されます。

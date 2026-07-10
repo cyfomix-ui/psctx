@@ -1,6 +1,6 @@
-# GitHub Publish Checklist
+﻿# GitHub Publish Checklist
 
-- [ ] Repository name: `psctx`
+- [ ] Repository name: `psx`
 - [ ] Description: `Project-local PowerShell context manager with per-folder history, environment variables, prompt markers, and quick history replay.`
 - [ ] License: MIT
 - [ ] Default branch: `main`
@@ -18,4 +18,4 @@ Suggested repository topics:
 powershell psreadline shell-history developer-tools windows-terminal productivity
 ```
 
-- [ ] Run `psx --v` and confirm that both PowerShell and PSCtx versions are displayed.
+- [ ] Run `psx --v` and confirm that both PowerShell and PSX versions are displayed.

@@ -1,4 +1,4 @@
-# ASSETS LICENSE / アセットライセンス
+﻿# ASSETS LICENSE / アセットライセンス
 
 ## 日本語
 

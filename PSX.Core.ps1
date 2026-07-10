@@ -4,18 +4,18 @@
   Project-local PowerShell context setup command.
 
 .USAGE
-  psctx <target-folder>
-  psctx /uninst <target-folder>
-  psctx <target-folder> /noamp
-  psctx <target-folder> /amp /showname
+  psx <target-folder>
+  psx /uninst <target-folder>
+  psx <target-folder> /noamp
+  psx <target-folder> /amp /showname
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:PSCtx_Version = '0.8.2'
-$script:PSCtx_Name    = 'PSCtx'
-$script:PSCtx_Title   = 'Project-local PowerShell Context'
+$script:PSX_Version = '0.9.2'
+$script:PSX_Name    = 'PSX'
+$script:PSX_Title   = 'Project-local PowerShell Context'
 
 $ToolDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
@@ -31,8 +31,8 @@ function Get-PPHProfileBlock {
     $qToolDir = Quote-PSLiteral $ToolDir
 
 @"
-# >>> PSCtx managed block >>>
-# This block is managed by psctx. Edit .psctx.json in each project instead.
+# >>> PSX managed block >>>
+# This block is managed by psx. Edit .psctx.json in each project instead.
 `$script:PPH_ToolDir = $qToolDir
 `$script:PPH_DefaultHistoryPath = `$null
 `$script:PPH_CurrentRoot = `$null
@@ -41,9 +41,24 @@ function Get-PPHProfileBlock {
 `$script:PPH_OriginalEnv = @{}
 `$script:PPH_EnableAmpersandFork = `$false
 `$script:PPH_ShowProjectNameInPrompt = `$false
-`$script:PSCtx_Version = '0.8.2'
-`$script:PSCtx_Name    = 'PSCtx'
-`$script:PSCtx_Title   = 'Project-local PowerShell Context'
+`$script:PSX_LastCheckedLocation = `$null
+`$script:PSX_ContextCache = @{}
+`$script:PSX_HistoryCommandSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+`$script:PSX_MaxHistoryEntries = 1000
+`$script:PSX_HistoryTrimThreshold = 1100
+foreach (`$legacyCommand in @('psctx','psprojhist','pph','psctxv','Show-PSCtxVersion')) {
+    `$functionPath = ("Function:\global:{0}" -f `$legacyCommand)
+    `$aliasPath = ("Alias:\{0}" -f `$legacyCommand)
+    if (Test-Path -LiteralPath `$functionPath) {
+        Remove-Item -LiteralPath `$functionPath -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath `$aliasPath) {
+        Remove-Item -LiteralPath `$aliasPath -Force -ErrorAction SilentlyContinue
+    }
+}
+`$script:PSX_Version = '0.9.2'
+`$script:PSX_Name    = 'PSX'
+`$script:PSX_Title   = 'Project-local PowerShell Context'
 
 try {
     Import-Module PSReadLine -ErrorAction SilentlyContinue
@@ -66,17 +81,13 @@ if (-not `$script:PPH_PromptInstalled) {
     `$script:PPH_PromptInstalled = `$true
 }
 
-function global:Show-PSCtxVersion {
+function global:Show-PSXVersion {
     `$psVersion = if (`$PSVersionTable.PSVersion) { `$PSVersionTable.PSVersion.ToString() } else { 'Unknown' }
     `$psEditionValue = if (`$PSVersionTable.PSEdition) { `$PSVersionTable.PSEdition } else { 'Desktop' }
     Write-Host ("PowerShell {0} ({1})" -f `$psVersion, `$psEditionValue)
-    Write-Host ("PSCtx      {0}" -f `$script:PSCtx_Version)
+    Write-Host ("PSX        {0}" -f `$script:PSX_Version)
     Write-Host ("Profile:   {0}" -f `$PROFILE)
     Write-Host ("ToolPath:  {0}" -f `$script:PPH_ToolDir)
-}
-
-function global:psctxv {
-    Show-PSCtxVersion
 }
 
 function global:psx {
@@ -86,29 +97,23 @@ function global:psx {
     )
 
     if (-not `$RemainingArgs -or `$RemainingArgs.Count -eq 0) {
-        Show-PSCtxVersion
+        Show-PSXVersion
         return
     }
 
     `$first = [string]`$RemainingArgs[0]
     if (`$first -match '^(--v|--version|-v|/v|/version|version)$') {
-        Show-PSCtxVersion
+        Show-PSXVersion
         return
     }
 
-    & (Join-Path `$script:PPH_ToolDir 'psctx.ps1') @RemainingArgs
-}
+    & (Join-Path `$script:PPH_ToolDir 'PSX.Core.ps1') @RemainingArgs
 
-function global:psctx {
-    & (Join-Path `$script:PPH_ToolDir 'psctx.ps1') @args
-}
-
-# Backward-compatible aliases.
-function global:psprojhist {
-    & (Join-Path `$script:PPH_ToolDir 'psctx.ps1') @args
-}
-function global:pph {
-    & (Join-Path `$script:PPH_ToolDir 'psctx.ps1') @args
+    # Registration/unregistration may change .psctx.json in the current path.
+    # Invalidate the location/context cache and apply the new state immediately.
+    `$script:PSX_LastCheckedLocation = `$null
+    `$script:PSX_ContextCache = @{}
+    try { Set-PPHProjectContext } catch { }
 }
 
 function Get-PPHActiveHistoryPath {
@@ -165,17 +170,80 @@ function Add-PPHHistoryMetaEntry {
     return `$true
 }
 
+function Optimize-PSXHistoryMetadata {
+    param(
+        [AllowNull()][string]`$HistoryPath,
+        [string[]]`$Commands
+    )
+    if (-not `$HistoryPath) { return }
+    `$parent = Split-Path -Parent `$HistoryPath
+    `$leaf = Split-Path -Leaf `$HistoryPath
+    `$base = [System.IO.Path]::GetFileNameWithoutExtension(`$leaf)
+    `$metaPath = Join-Path `$parent ("{0}_psctx_history.jsonl" -f `$base)
+    if (-not (Test-Path -LiteralPath `$metaPath)) { return }
+    try {
+        `$latest = @{}
+        foreach (`$line in (Get-Content -LiteralPath `$metaPath -ErrorAction Stop)) {
+            if (-not `$line -or -not `$line.Trim()) { continue }
+            try {
+                `$obj = `$line | ConvertFrom-Json -ErrorAction Stop
+                `$cmd = ([string]`$obj.CommandLine).Trim()
+                if (`$cmd) { `$latest[`$cmd] = [string]`$obj.Time }
+            } catch { }
+        }
+        `$out = New-Object System.Collections.Generic.List[string]
+        foreach (`$cmd in @(`$Commands)) {
+            if (-not `$cmd) { continue }
+            `$time = if (`$latest.ContainsKey(`$cmd)) { `$latest[`$cmd] } else { '---- -- -- --:--:--' }
+            `$record = [pscustomobject]@{ Time=`$time; CommandLine=`$cmd }
+            `$out.Add((`$record | ConvertTo-Json -Compress -Depth 4)) | Out-Null
+        }
+        Set-Content -LiteralPath `$metaPath -Value `$out -Encoding UTF8
+    } catch {
+        Write-Debug ("PSX history metadata optimization failed: {0}" -f `$_.Exception.Message)
+    }
+}
+
+function Optimize-PSXHistoryFile {
+    param([AllowNull()][string]`$HistoryPath)
+
+    `$script:PSX_HistoryCommandSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    if (-not `$HistoryPath -or -not (Test-Path -LiteralPath `$HistoryPath)) { return }
+
+    try {
+        `$lines = @(Get-Content -LiteralPath `$HistoryPath -ErrorAction Stop)
+        `$seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        `$uniqueNewestFirst = New-Object System.Collections.Generic.List[string]
+        for (`$i = `$lines.Count - 1; `$i -ge 0; `$i--) {
+            `$normalized = ([string]`$lines[`$i]).Trim()
+            if (-not `$normalized) { continue }
+            if (`$seen.Add(`$normalized)) { `$uniqueNewestFirst.Add(`$normalized) | Out-Null }
+        }
+        `$kept = @(`$uniqueNewestFirst | Select-Object -First `$script:PSX_MaxHistoryEntries)
+        [array]::Reverse(`$kept)
+        if (`$lines.Count -gt `$script:PSX_HistoryTrimThreshold -or `$kept.Count -ne `$lines.Count) {
+            Set-Content -LiteralPath `$HistoryPath -Value `$kept -Encoding UTF8
+        }
+        foreach (`$command in `$kept) { [void]`$script:PSX_HistoryCommandSet.Add([string]`$command) }
+        Optimize-PSXHistoryMetadata -HistoryPath `$HistoryPath -Commands `$kept
+    } catch {
+        Write-Debug ("PSX history optimization failed: {0}" -f `$_.Exception.Message)
+    }
+}
+
 function Set-PPHAddToHistoryHandler {
     try {
         Set-PSReadLineOption -AddToHistoryHandler {
             param([string]`$line)
-            try {
-                Add-PPHHistoryMetaEntry -CommandLine `$line | Out-Null
-            } catch {
-            }
+            `$normalized = if (`$null -eq `$line) { '' } else { `$line.Trim() }
+            if (-not `$normalized) { return `$false }
+            if (`$script:PSX_HistoryCommandSet.Contains(`$normalized)) { return `$false }
+            [void]`$script:PSX_HistoryCommandSet.Add(`$normalized)
+            try { Add-PPHHistoryMetaEntry -CommandLine `$normalized | Out-Null } catch { }
             return `$true
         }
     } catch {
+        Write-Debug ("PSX AddToHistory handler could not be installed: {0}" -f `$_.Exception.Message)
     }
 }
 
@@ -403,27 +471,26 @@ function Read-PPHLegacyPs1ProjectConfig {
 }
 
 function Get-PPHProjectContext {
-    try {
-        `$providerPath = (Get-Location).ProviderPath
-    } catch {
-        return `$null
+    try { `$providerPath = (Get-Location).ProviderPath } catch { return `$null }
+    if (-not `$providerPath) { return `$null }
+    try { `$providerPath = [System.IO.Path]::GetFullPath(`$providerPath).TrimEnd('\') } catch { }
+
+    if (`$script:PSX_ContextCache.ContainsKey(`$providerPath)) {
+        `$cached = `$script:PSX_ContextCache[`$providerPath]
+        if (`$cached -is [string] -and `$cached -eq '__PSX_NONE__') { return `$null }
+        return `$cached
     }
 
-    if (-not `$providerPath) {
-        return `$null
-    }
-
+    `$visited = New-Object System.Collections.Generic.List[string]
     `$dir = Get-Item -LiteralPath `$providerPath -ErrorAction SilentlyContinue
-    if (-not `$dir) {
-        return `$null
-    }
+    if (-not `$dir) { return `$null }
 
     while (`$dir) {
+        `$visited.Add(`$dir.FullName) | Out-Null
         `$jsonFile = Join-Path `$dir.FullName '.psctx.json'
         `$legacyFile = Join-Path `$dir.FullName '.psctx.ps1'
         `$ctxFile = `$null
         `$loaded = @{}
-
         if (Test-Path -LiteralPath `$jsonFile) {
             `$ctxFile = `$jsonFile
             `$loaded = Read-PPHJsonProjectConfig -ConfigPath `$jsonFile
@@ -431,23 +498,17 @@ function Get-PPHProjectContext {
             `$ctxFile = `$legacyFile
             `$loaded = Read-PPHLegacyPs1ProjectConfig -ConfigPath `$legacyFile
         }
-
         if (`$ctxFile) {
             `$name = `$loaded.Name
-            if (-not `$name) {
-                `$name = Split-Path `$dir.FullName -Leaf
-            }
-
-            return [pscustomobject]@{
-                Root       = `$dir.FullName
-                Name       = [string]`$name
-                ConfigPath = `$ctxFile
-                Config     = `$loaded
-            }
+            if (-not `$name) { `$name = Split-Path `$dir.FullName -Leaf }
+            `$result = [pscustomobject]@{ Root=`$dir.FullName; Name=[string]`$name; ConfigPath=`$ctxFile; Config=`$loaded }
+            foreach (`$path in `$visited) { `$script:PSX_ContextCache[`$path] = `$result }
+            return `$result
         }
         `$dir = `$dir.Parent
     }
 
+    foreach (`$path in `$visited) { `$script:PSX_ContextCache[`$path] = '__PSX_NONE__' }
     return `$null
 }
 
@@ -480,28 +541,9 @@ function Apply-PPHProjectEnv {
 
 function Import-PPHHistory {
     param([AllowNull()][string]`$HistoryPath)
-
-    if (-not `$HistoryPath) {
-        return
-    }
-
-    try {
-        [Microsoft.PowerShell.PSConsoleReadLine]::ClearHistory()
-    } catch {
-        return
-    }
-
-    if (Test-Path -LiteralPath `$HistoryPath) {
-        Get-Content -LiteralPath `$HistoryPath -ErrorAction SilentlyContinue |
-            Where-Object { `$_ -and `$_.Trim().Length -gt 0 } |
-            Select-Object -Last 3000 |
-            ForEach-Object {
-                try {
-                    [Microsoft.PowerShell.PSConsoleReadLine]::AddToHistory(`$_) | Out-Null
-                } catch {
-                }
-            }
-    }
+    # PSReadLine session history is intentionally not cleared/replayed here.
+    # Replaying thousands of entries made directory changes visibly slow.
+    Optimize-PSXHistoryFile -HistoryPath `$HistoryPath
 }
 
 function Set-PPHReadLineHistoryPath {
@@ -523,6 +565,9 @@ function Set-PPHReadLineHistoryPath {
 }
 
 function Set-PPHProjectContext {
+    try { `$currentLocation = (Get-Location).ProviderPath } catch { return }
+    if (`$currentLocation -and `$script:PSX_LastCheckedLocation -and `$currentLocation -ieq `$script:PSX_LastCheckedLocation) { return }
+    `$script:PSX_LastCheckedLocation = `$currentLocation
     `$ctx = Get-PPHProjectContext
 
     if (`$null -eq `$ctx) {
@@ -620,8 +665,6 @@ try {
             `$cursor = `$null
             [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]`$line, [ref]`$cursor)
 
-            Set-PPHProjectContext
-
             # Bash-style history recall: ! 123
             # Implemented here so the line is rewritten before PowerShell parses '!'.
             if (`$line -match '^\s*!\s*(\d+)\s*$') {
@@ -657,8 +700,8 @@ function global:prompt {
     } catch {
     }
 
-    # PSCtx marker:
-    #   '# ' gray  = PSCtx is loaded, but current folder is not a registered context.
+    # PSX marker:
+    #   '# ' gray  = PSX is loaded, but current folder is not a registered context.
     #   '$ ' white = current folder is inside a registered project context.
     if (`$script:PPH_CurrentRoot) {
         Write-Host '$ ' -ForegroundColor White -NoNewline
@@ -680,7 +723,7 @@ function global:prompt {
 
     return "PS `$(`$executionContext.SessionState.Path.CurrentLocation)`$('>' * (`$nestedPromptLevel + 1)) "
 }
-# <<< PSCtx managed block <<<
+# <<< PSX managed block <<<
 "@
 }
 
@@ -705,7 +748,7 @@ function Install-PPHProfileBlock {
     Copy-Item -LiteralPath $profilePath -Destination $backup -Force
 
     $block = Get-PPHProfileBlock -ToolDir $ToolDir
-    $pattern = '(?s)# >>> (?:PerProjectPowerShellHistory|PSCtx) managed block >>>.*?# <<< (?:PerProjectPowerShellHistory|PSCtx) managed block <<<'
+    $pattern = '(?s)# >>> (?:PerProjectPowerShellHistory|PSCtx|PSX) managed block >>>.*?# <<< (?:PerProjectPowerShellHistory|PSCtx|PSX) managed block <<<'
 
     if ($existing -match $pattern) {
         $newContent = [regex]::Replace($existing, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $block })
@@ -779,7 +822,7 @@ function Remove-PPHProfileBlock {
     $existing = Get-Content -LiteralPath $profilePath -Raw -ErrorAction SilentlyContinue
     if (-not $existing) { return $false }
 
-    $pattern = '(?s)\r?\n?# >>> (?:PerProjectPowerShellHistory|PSCtx) managed block >>>.*?# <<< (?:PerProjectPowerShellHistory|PSCtx) managed block <<<\r?\n?'
+    $pattern = '(?s)\r?\n?# >>> (?:PerProjectPowerShellHistory|PSCtx|PSX) managed block >>>.*?# <<< (?:PerProjectPowerShellHistory|PSCtx|PSX) managed block <<<\r?\n?'
     if ($existing -notmatch $pattern) { return $false }
 
     $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
@@ -840,6 +883,7 @@ function Write-PPHProjectConfig {
 
     $json = $config | ConvertTo-Json -Depth 8
     Set-Content -LiteralPath $ctxFile -Value $json -Encoding UTF8
+    $script:PSX_ContextCache = @{}
 }
 
 function Register-PPHProject {
@@ -891,61 +935,62 @@ function Unregister-PPHProject {
         }
     }
 
+    $script:PSX_ContextCache = @{}
     return [pscustomobject]@{ Root = $root; Changed = $changed }
 }
 
-function Show-PPHVersion {
+function Show-PSXVersion {
     $psVersion = if ($PSVersionTable.PSVersion) { $PSVersionTable.PSVersion.ToString() } else { 'Unknown' }
     $psEditionValue = if ($PSVersionTable.PSEdition) { $PSVersionTable.PSEdition } else { 'Desktop' }
     Write-Host ("PowerShell {0} ({1})" -f $psVersion, $psEditionValue)
-    Write-Host ("PSCtx      {0}" -f $script:PSCtx_Version)
+    Write-Host ("PSX        {0}" -f $script:PSX_Version)
     Write-Host ("Profile:   {0}" -f $PROFILE)
     Write-Host ("ToolPath:  {0}" -f $ToolDir)
 }
 
 function Show-Usage {
 @'
-psctx usage:
+psx usage:
 
-  psctx <folder>
+  psx <folder>
       Register a folder as a per-project PowerShell history/context root.
 
-  psctx /uninst <folder>
+  psx /uninst <folder>
       Disable per-project history/context for that folder.
       .psctx.json / .psctx.ps1 are renamed, not deleted.
 
-  psctx /uninst <folder> /purge
+  psx /uninst <folder> /purge
       Disable and remove .pslocal history directory.
 
-  psctx <folder> /noamp
+  psx <folder> /noamp
       Register without trailing-& background support.
 
-  psctx <folder> /amp
+  psx <folder> /amp
       Register with trailing-& background support. This is the default.
 
-  psctx <folder> /name MyProject
+  psx <folder> /name MyProject
       Register with a custom project name.
 
-  psctx <folder> /showname
+  psx <folder> /showname
       Show [ProjectName] after the white $ prompt marker.
 
   h
       Show recent PSReadLine history with numeric ids and DateTime. Use h -All for all entries.
-      Note: these ids are PSCtx/PSReadLine ids, not Get-History session ids.
+      Note: these ids are PSX/PSReadLine ids, not Get-History session ids.
 
   ! <id>
   !<id>
-      Run the command shown by h for the specified PSCtx history id.
+      Run the command shown by h for the specified PSX history id.
 
-  psctx /version
-  psctx -v
+  psx /version
+  psx -v
   psx --v
-      Show PowerShell and PSCtx versions.
+      Show PowerShell and PSX versions.
 
-  psctx /installtool
+  psx /installtool
       Install/update the PowerShell profile block only.
 
-  psctx /removeprofile
+  psx /removeprofile
       Remove the PowerShell profile block.
 '@ | Write-Host
 }
@@ -963,8 +1008,8 @@ for ($i = 0; $i -lt $raw.Count; $i++) {
     $a = [string]$raw[$i]
     switch -Regex ($a) {
         '^(\/|--?)(h|help|\?)$' { Show-Usage; exit 0 }
-        '^(\/|--?)(v|version)$' { Show-PPHVersion; exit 0 }
-        '^version$' { Show-PPHVersion; exit 0 }
+        '^(\/|--?)(v|version)$' { Show-PSXVersion; exit 0 }
+        '^version$' { Show-PSXVersion; exit 0 }
         '^(\/|-)(installtool|install)$' { $mode = 'installtool'; continue }
         '^(\/|-)(removeprofile|uninstalltool|tooluninst)$' { $mode = 'removeprofile'; continue }
         '^(\/|-)(uninst|uninstall|remove)$' { $mode = 'unregister'; continue }
@@ -986,9 +1031,15 @@ for ($i = 0; $i -lt $raw.Count; $i++) {
 }
 
 if ($mode -eq 'installtool') {
+    foreach ($legacyFile in @('psctx.cmd','psctx.ps1','psprojhist.cmd','psprojhist.ps1','pph.cmd','pph.ps1')) {
+        $legacyPath = Join-Path $ToolDir $legacyFile
+        if (Test-Path -LiteralPath $legacyPath -PathType Leaf) {
+            Remove-Item -LiteralPath $legacyPath -Force -ErrorAction SilentlyContinue
+        }
+    }
     $profilePath = Install-PPHProfileBlock -ToolDir $ToolDir
     $pathAdded = Add-ToolDirToUserPath -ToolDir $ToolDir
-    Write-Host "Installed psctx profile block:" -ForegroundColor Green
+    Write-Host "Installed psx profile block:" -ForegroundColor Green
     Write-Host "  $profilePath"
     if ($pathAdded) {
         Write-Host "Added tool folder to User PATH:" -ForegroundColor Green
@@ -1003,8 +1054,8 @@ if ($mode -eq 'installtool') {
 if ($mode -eq 'removeprofile') {
     $removed = Remove-PPHProfileBlock
     $pathRemoved = Remove-ToolDirFromUserPath -ToolDir $ToolDir
-    if ($removed) { Write-Host 'Removed psctx profile block.' -ForegroundColor Green }
-    else { Write-Host 'No psctx profile block found.' }
+    if ($removed) { Write-Host 'Removed psx profile block.' -ForegroundColor Green }
+    else { Write-Host 'No psx profile block found.' }
     if ($pathRemoved) { Write-Host 'Removed tool folder from User PATH.' -ForegroundColor Green }
     Write-Host 'Open a new PowerShell window to complete removal.'
     exit 0
